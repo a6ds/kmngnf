@@ -1,0 +1,640 @@
+--[[ Created January 2022
+     OPTIMIZED VERSION with Custom UI
+     Fully reliant on RoBeats functions and data
+     Fixed hold note detection and handling
+     Added Standard Deviation Settings
+     Added Asymmetric Deviation Setting
+     Auto-detects spectate mode
+]]
+
+local player = game:GetService("Players").LocalPlayer
+local PlayerGui = player:WaitForChild("PlayerGui")
+
+-- Autoplayer variables
+local noteTimeTarget = -20 -- Base timing offset (when notes become hittable)
+local autoplayerEnabled = false -- Toggle for autoplayer
+
+-- Standard deviation settings
+local deviationSettings = {
+    ["0ms (Perfect)"] = {min = 0, max = 0},
+    ["±10ms"] = {min = -10, max = 10},
+    ["-19ms to +39ms"] = {min = -19, max = 39},
+    ["-30ms to +50ms"] = {min = -30, max = 50}
+}
+local deviationOptions = {"0ms (Perfect)", "±10ms", "-19ms to +39ms", "-30ms to +50ms"}
+local currentDeviation = "0ms (Perfect)" -- Default deviation
+local deviationValue = {min = 0, max = 0}
+local currentDeviationIndex = 1
+
+local trackSystem
+local random = Random.new()
+local spectateMode = false
+local savedDeviation = currentDeviation
+local lastRandomValues = {} -- Track recent random values to avoid clumping
+
+-- UI Elements (declared here so they can be accessed by functions)
+local StatusLabel
+local DeviationButton
+local EnableToggle
+
+--// Autoplayer functions 
+
+local function getTrackActionFunctions(trackSystem)
+    local pressTrack, releaseTrack
+    
+    for index, trackFunction in trackSystem do 
+        if typeof(trackFunction) == "function" then 
+            local constants = getconstants(trackFunction)
+            
+            if table.find(constants, "press") then 
+                pressTrack = trackFunction
+                if releaseTrack then break end
+            elseif table.find(constants, "release") then 
+                releaseTrack = trackFunction
+                if pressTrack then break end
+            end
+        end
+    end
+    
+    return pressTrack, releaseTrack
+end
+
+local function getLocalTrackSystem(session)
+    local localSlotIndex = getupvalue(session.set_local_game_slot, 1)
+    
+    for index, sessionFunction in session do 
+        if typeof(sessionFunction) == "function" then 
+            local object = getupvalues(sessionFunction)[1]
+            
+            if typeof(object) == "table" and rawget(object, "count") and object:count() <= 4 then 
+                return object:get(localSlotIndex)
+            end
+        end
+    end
+end
+
+-- Function to generate random timing with deviation
+local function getRandomTiming(baseTiming)
+    if deviationValue.min ~= 0 or deviationValue.max ~= 0 then
+        local randomOffset
+        local attempts = 0
+        local range = deviationValue.max - deviationValue.min
+        
+        -- Try to get a value that's not too close to recent values (better distribution)
+        repeat
+            randomOffset = random:NextNumber(deviationValue.min, deviationValue.max)
+            attempts = attempts + 1
+            
+            -- Check if this value is too similar to recent values
+            local tooSimilar = false
+            for _, recentValue in ipairs(lastRandomValues) do
+                if math.abs(randomOffset - recentValue) < (range * 0.15) then
+                    tooSimilar = true
+                    break
+                end
+            end
+            
+            -- Accept value if not too similar or we've tried too many times
+            if not tooSimilar or attempts > 3 then
+                -- Store this value
+                table.insert(lastRandomValues, randomOffset)
+                if #lastRandomValues > 5 then
+                    table.remove(lastRandomValues, 1) -- Keep only last 5
+                end
+                break
+            end
+        until false
+        
+        return baseTiming + randomOffset
+    end
+    return baseTiming
+end
+
+-- Function to update status display
+local function updateStatus()
+    if StatusLabel then
+        StatusLabel.Text = string.format(
+            "Status:\nAutoplayer: %s\nSpectate Mode: %s\nDeviation: %s\nTrackSystem: %s",
+            autoplayerEnabled and "ENABLED" or "DISABLED",
+            spectateMode and "ACTIVE" or "INACTIVE",
+            currentDeviation,
+            trackSystem and "Found" or "Not Found"
+        )
+    end
+end
+
+--// get trackSystem 
+
+for index, module in getloadedmodules() do 
+    local moduleValue = require(module)
+    
+    if typeof(moduleValue) == "table" then 
+        local newFunction = rawget(moduleValue, "new")
+        
+        if newFunction then 
+            local firstUpvalue = getupvalues(newFunction)[1]
+            
+            if typeof(firstUpvalue) == "table" and rawget(firstUpvalue, "twister") then 
+                trackSystem = moduleValue
+                print("[DEBUG] trackSystem found:", module)
+                break
+            end
+        end
+    end
+end
+
+--// Create Custom UI
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RoBeatsAutoplayer"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+-- Main Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 350, 0, 380)
+MainFrame.Position = UDim2.new(0.5, -175, 0.5, -190)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 10)
+MainCorner.Parent = MainFrame
+
+-- Title Bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1, 0, 0, 40)
+TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 10)
+TitleCorner.Parent = TitleBar
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -20, 1, 0)
+Title.Position = UDim2.new(0, 10, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "RoBeats Autoplayer"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TitleBar
+
+-- Close Button
+local CloseButton = Instance.new("TextButton")
+CloseButton.Size = UDim2.new(0, 30, 0, 30)
+CloseButton.Position = UDim2.new(1, -35, 0, 5)
+CloseButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseButton.Text = "X"
+CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.TextSize = 16
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.BorderSizePixel = 0
+CloseButton.Parent = TitleBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 5)
+CloseCorner.Parent = CloseButton
+
+CloseButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+end)
+
+-- Enable Toggle
+local EnableLabel = Instance.new("TextLabel")
+EnableLabel.Size = UDim2.new(1, -40, 0, 30)
+EnableLabel.Position = UDim2.new(0, 20, 0, 60)
+EnableLabel.BackgroundTransparency = 1
+EnableLabel.Text = "Enable Autoplayer"
+EnableLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+EnableLabel.TextSize = 14
+EnableLabel.Font = Enum.Font.Gotham
+EnableLabel.TextXAlignment = Enum.TextXAlignment.Left
+EnableLabel.Parent = MainFrame
+
+EnableToggle = Instance.new("TextButton")
+EnableToggle.Size = UDim2.new(0, 50, 0, 25)
+EnableToggle.Position = UDim2.new(1, -70, 0, 62)
+EnableToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+EnableToggle.Text = "OFF"
+EnableToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+EnableToggle.TextSize = 12
+EnableToggle.Font = Enum.Font.GothamBold
+EnableToggle.BorderSizePixel = 0
+EnableToggle.Parent = MainFrame
+
+local EnableCorner = Instance.new("UICorner")
+EnableCorner.CornerRadius = UDim.new(0, 5)
+EnableCorner.Parent = EnableToggle
+
+EnableToggle.MouseButton1Click:Connect(function()
+    autoplayerEnabled = not autoplayerEnabled
+    EnableToggle.Text = autoplayerEnabled and "ON" or "OFF"
+    EnableToggle.BackgroundColor3 = autoplayerEnabled and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 50, 50)
+    print("Autoplayer:", autoplayerEnabled and "ENABLED" or "DISABLED")
+    updateStatus()
+end)
+
+-- Deviation Dropdown
+local DeviationLabel = Instance.new("TextLabel")
+DeviationLabel.Size = UDim2.new(1, -40, 0, 30)
+DeviationLabel.Position = UDim2.new(0, 20, 0, 105)
+DeviationLabel.BackgroundTransparency = 1
+DeviationLabel.Text = "Standard Deviation"
+DeviationLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+DeviationLabel.TextSize = 14
+DeviationLabel.Font = Enum.Font.Gotham
+DeviationLabel.TextXAlignment = Enum.TextXAlignment.Left
+DeviationLabel.Parent = MainFrame
+
+DeviationButton = Instance.new("TextButton")
+DeviationButton.Size = UDim2.new(1, -40, 0, 30)
+DeviationButton.Position = UDim2.new(0, 20, 0, 135)
+DeviationButton.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+DeviationButton.Text = currentDeviation
+DeviationButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+DeviationButton.TextSize = 12
+DeviationButton.Font = Enum.Font.Gotham
+DeviationButton.BorderSizePixel = 0
+DeviationButton.Parent = MainFrame
+
+local DeviationCorner = Instance.new("UICorner")
+DeviationCorner.CornerRadius = UDim.new(0, 5)
+DeviationCorner.Parent = DeviationButton
+
+DeviationButton.MouseButton1Click:Connect(function()
+    if not spectateMode then
+        currentDeviationIndex = currentDeviationIndex + 1
+        if currentDeviationIndex > #deviationOptions then
+            currentDeviationIndex = 1
+        end
+        currentDeviation = deviationOptions[currentDeviationIndex]
+        deviationValue = deviationSettings[currentDeviation]
+        DeviationButton.Text = currentDeviation
+        print("Standard deviation set to:", currentDeviation)
+        updateStatus()
+    else
+        print("Cannot change deviation while in spectate mode")
+    end
+end)
+
+-- Custom Deviation Inputs
+local CustomLabel = Instance.new("TextLabel")
+CustomLabel.Size = UDim2.new(1, -40, 0, 30)
+CustomLabel.Position = UDim2.new(0, 20, 0, 175)
+CustomLabel.BackgroundTransparency = 1
+CustomLabel.Text = "Custom Deviation (ms)"
+CustomLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+CustomLabel.TextSize = 14
+CustomLabel.Font = Enum.Font.Gotham
+CustomLabel.TextXAlignment = Enum.TextXAlignment.Left
+CustomLabel.Parent = MainFrame
+
+-- Min Input
+local MinLabel = Instance.new("TextLabel")
+MinLabel.Size = UDim2.new(0, 40, 0, 30)
+MinLabel.Position = UDim2.new(0, 20, 0, 205)
+MinLabel.BackgroundTransparency = 1
+MinLabel.Text = "Min:"
+MinLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinLabel.TextSize = 12
+MinLabel.Font = Enum.Font.Gotham
+MinLabel.TextXAlignment = Enum.TextXAlignment.Left
+MinLabel.Parent = MainFrame
+
+local MinInput = Instance.new("TextBox")
+MinInput.Size = UDim2.new(0, 80, 0, 30)
+MinInput.Position = UDim2.new(0, 60, 0, 205)
+MinInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+MinInput.Text = "0"
+MinInput.PlaceholderText = "-30"
+MinInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinInput.TextSize = 12
+MinInput.Font = Enum.Font.Gotham
+MinInput.BorderSizePixel = 0
+MinInput.Parent = MainFrame
+
+local MinCorner = Instance.new("UICorner")
+MinCorner.CornerRadius = UDim.new(0, 5)
+MinCorner.Parent = MinInput
+
+-- Max Input
+local MaxLabel = Instance.new("TextLabel")
+MaxLabel.Size = UDim2.new(0, 40, 0, 30)
+MaxLabel.Position = UDim2.new(0, 150, 0, 205)
+MaxLabel.BackgroundTransparency = 1
+MaxLabel.Text = "Max:"
+MaxLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+MaxLabel.TextSize = 12
+MaxLabel.Font = Enum.Font.Gotham
+MaxLabel.TextXAlignment = Enum.TextXAlignment.Left
+MaxLabel.Parent = MainFrame
+
+local MaxInput = Instance.new("TextBox")
+MaxInput.Size = UDim2.new(0, 80, 0, 30)
+MaxInput.Position = UDim2.new(0, 190, 0, 205)
+MaxInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+MaxInput.Text = "0"
+MaxInput.PlaceholderText = "+50"
+MaxInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+MaxInput.TextSize = 12
+MaxInput.Font = Enum.Font.Gotham
+MaxInput.BorderSizePixel = 0
+MaxInput.Parent = MainFrame
+
+local MaxCorner = Instance.new("UICorner")
+MaxCorner.CornerRadius = UDim.new(0, 5)
+MaxCorner.Parent = MaxInput
+
+-- Apply Custom Button
+local ApplyCustomButton = Instance.new("TextButton")
+ApplyCustomButton.Size = UDim2.new(0, 60, 0, 30)
+ApplyCustomButton.Position = UDim2.new(1, -80, 0, 205)
+ApplyCustomButton.BackgroundColor3 = Color3.fromRGB(50, 150, 200)
+ApplyCustomButton.Text = "Apply"
+ApplyCustomButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ApplyCustomButton.TextSize = 12
+ApplyCustomButton.Font = Enum.Font.GothamBold
+ApplyCustomButton.BorderSizePixel = 0
+ApplyCustomButton.Parent = MainFrame
+
+local ApplyCorner = Instance.new("UICorner")
+ApplyCorner.CornerRadius = UDim.new(0, 5)
+ApplyCorner.Parent = ApplyCustomButton
+
+ApplyCustomButton.MouseButton1Click:Connect(function()
+    if not spectateMode then
+        local minVal = tonumber(MinInput.Text)
+        local maxVal = tonumber(MaxInput.Text)
+        
+        if minVal and maxVal then
+            if minVal <= maxVal then
+                deviationValue = {min = minVal, max = maxVal}
+                currentDeviation = string.format("%dms to %dms", minVal, maxVal)
+                DeviationButton.Text = currentDeviation
+                print("Custom deviation applied:", currentDeviation)
+                updateStatus()
+            else
+                warn("Min value must be less than or equal to Max value")
+            end
+        else
+            warn("Please enter valid numbers")
+        end
+    else
+        print("Cannot change deviation while in spectate mode")
+    end
+end)
+
+-- Status Display
+StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -40, 0, 65)
+StatusLabel.Position = UDim2.new(0, 20, 0, 250)
+StatusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+StatusLabel.Text = "Status:\nAutoplayer: DISABLED\nSpectate Mode: INACTIVE\nDeviation: " .. currentDeviation
+StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+StatusLabel.TextSize = 12
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+StatusLabel.BorderSizePixel = 0
+StatusLabel.Parent = MainFrame
+
+local StatusPadding = Instance.new("UIPadding")
+StatusPadding.PaddingLeft = UDim.new(0, 10)
+StatusPadding.PaddingTop = UDim.new(0, 10)
+StatusPadding.Parent = StatusLabel
+
+local StatusCorner = Instance.new("UICorner")
+StatusCorner.CornerRadius = UDim.new(0, 5)
+StatusCorner.Parent = StatusLabel
+
+-- Disable Spectate Mode Button
+local DisableSpectateButton = Instance.new("TextButton")
+DisableSpectateButton.Size = UDim2.new(1, -40, 0, 25)
+DisableSpectateButton.Position = UDim2.new(0, 20, 0, 325)
+DisableSpectateButton.BackgroundColor3 = Color3.fromRGB(180, 100, 50)
+DisableSpectateButton.Text = "Disable Spectate Mode"
+DisableSpectateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+DisableSpectateButton.TextSize = 12
+DisableSpectateButton.Font = Enum.Font.GothamBold
+DisableSpectateButton.BorderSizePixel = 0
+DisableSpectateButton.Parent = MainFrame
+
+local DisableSpectateCorner = Instance.new("UICorner")
+DisableSpectateCorner.CornerRadius = UDim.new(0, 5)
+DisableSpectateCorner.Parent = DisableSpectateButton
+
+DisableSpectateButton.MouseButton1Click:Connect(function()
+    if spectateMode then
+        spectateMode = false
+        currentDeviation = savedDeviation
+        deviationValue = deviationSettings[savedDeviation] or deviationValue
+        DeviationButton.Text = currentDeviation
+        print("[Spectate Mode]: MANUALLY DISABLED - Restored to", savedDeviation)
+        updateStatus()
+    else
+        print("Spectate mode is not active")
+    end
+end)
+
+-- Make draggable
+local dragging, dragInput, dragStart, startPos
+
+local function update(input)
+    local delta = input.Position - dragStart
+    MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+TitleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+game:GetService("UserInputService").InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        update(input)
+    end
+end)
+
+-- Chat detection for spectate mode
+local function setupChatDetection()
+    local function checkTextForSpectate(text)
+        if type(text) == "string" and text ~= "" then
+            local lowerText = text:lower()
+            
+            -- Check if someone is spectating
+            if lowerText:match("is now spectating") or lowerText:match("is spectating") then
+                if not spectateMode then
+                    savedDeviation = currentDeviation
+                    spectateMode = true
+                    deviationValue = deviationSettings["-19ms to +39ms"]
+                    currentDeviation = "-19ms to +39ms"
+                    DeviationButton.Text = currentDeviation
+                    print("[Spectate Mode]: ENABLED - Switched to -19ms to +39ms deviation")
+                    updateStatus()
+                end
+                return true
+            end
+            
+            -- Check if someone stopped spectating
+            if lowerText:match("stopped spectating") or lowerText:match("left") then
+                if spectateMode then
+                    spectateMode = false
+                    currentDeviation = savedDeviation
+                    deviationValue = deviationSettings[savedDeviation]
+                    DeviationButton.Text = currentDeviation
+                    print("[Spectate Mode]: DISABLED - Restored to", savedDeviation)
+                    updateStatus()
+                end
+                return true
+            end
+        end
+        return false
+    end
+    
+    -- Monitor ALL TextLabels in PlayerGui
+    local monitoredUI = {}
+    local function monitorUIElement(element)
+        if (element:IsA("TextLabel") or element:IsA("TextButton")) and not monitoredUI[element] then
+            monitoredUI[element] = true
+            
+            element:GetPropertyChangedSignal("Text"):Connect(function()
+                if element.Text and element.Text ~= "" then
+                    checkTextForSpectate(element.Text)
+                end
+            end)
+        end
+    end
+    
+    -- Monitor existing UI
+    for _, descendant in pairs(PlayerGui:GetDescendants()) do
+        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+            monitorUIElement(descendant)
+        end
+    end
+    
+    -- Monitor new UI
+    PlayerGui.DescendantAdded:Connect(function(descendant)
+        task.wait(0.1)
+        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+            monitorUIElement(descendant)
+        end
+    end)
+end
+
+setupChatDetection()
+
+-- Initial status update
+updateStatus()
+
+-- Keybind to toggle UI (LeftControl)
+game:GetService("UserInputService").InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == Enum.KeyCode.LeftControl then
+        MainFrame.Visible = not MainFrame.Visible
+    end
+end)
+
+if not trackSystem then 
+    warn("[ERROR] TrackSystem not found! Make sure you're in a RoBeats game.")
+    return 
+end
+
+--// main autoplayer logic
+
+local oldTrackSystemNew = trackSystem.new
+trackSystem.new = function(...)
+    local trackFunctions = oldTrackSystemNew(...)
+    local arguments = {...}
+    
+    local playerName = arguments[2]._players._slots:get(arguments[3])._name
+    if playerName ~= player.Name then return trackFunctions end
+
+    for index, trackFunction in trackFunctions do 
+        local upvalues = getupvalues(trackFunction)
+        
+        if typeof(upvalues[1]) == "table" and rawget(upvalues[1], "profilebegin") then 
+            local notesTable = upvalues[2]
+            
+            trackFunctions[index] = function(self, slot, session)
+                if not autoplayerEnabled then
+                    return trackFunction(self, slot, session)
+                end
+                
+                local localTrackSystem = getLocalTrackSystem(session)
+                local pressTrack, releaseTrack = getTrackActionFunctions(localTrackSystem)
+                
+                if not pressTrack or not releaseTrack then
+                    return trackFunction(self, slot, session)
+                end
+                
+                local testPressName = getconstant(pressTrack, 10)
+                local testReleaseName = getconstant(releaseTrack, 6)
+    
+                for noteIndex = 1, notesTable:count() do 
+                    local note = notesTable:get(noteIndex)
+                    if note then 
+                        local testPress = note[testPressName]
+                        local noteTrackIndex = note:get_track_index(noteIndex)
+                        local pressed, pressResult, pressDelay = testPress(note)
+                        
+                        local actualTiming = getRandomTiming(noteTimeTarget)
+                        
+                        if pressed and pressDelay >= actualTiming then
+                            pressTrack(localTrackSystem, session, noteTrackIndex)
+                            session:debug_any_press()
+                            
+                            local hasEndTime = rawget(note, "get_time_to_end")
+                            if hasEndTime then
+                                local releaseDelay = 0.05 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
+                                task.delay(releaseDelay, function()
+                                    releaseTrack(localTrackSystem, session, noteTrackIndex)
+                                end)
+                            end
+                        end
+                        
+                        local testRelease = note[testReleaseName]
+                        if testRelease and not rawget(note, "get_time_to_end") then 
+                            local released, releaseResult, releaseDelay = testRelease(note)
+                            
+                            if released and releaseDelay >= actualTiming then
+                                local releaseDelay = 0.02 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
+                                task.delay(releaseDelay, function()
+                                    releaseTrack(localTrackSystem, session, noteTrackIndex)
+                                end)
+                            end
+                        end
+                    end
+                end
+                
+                return trackFunction(self, slot, session)
+            end
+        end
+    end
+    
+    return trackFunctions
+end
+
+print("[RoBeats Autoplayer] Loaded successfully!")
+print("[RoBeats Autoplayer] Press Left Control to toggle UI")
