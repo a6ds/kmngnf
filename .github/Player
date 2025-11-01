@@ -11,7 +11,7 @@ local player = game:GetService("Players").LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
 -- Autoplayer variables
-local noteTimeTarget = -20 -- Base timing offset (when notes become hittable)
+local noteTimeTarget = 0 -- Base timing offset (when notes become hittable)
 local autoplayerEnabled = false -- Toggle for autoplayer
 
 -- Standard deviation settings
@@ -489,10 +489,10 @@ local function setupChatDetection()
                 if not spectateMode then
                     savedDeviation = currentDeviation
                     spectateMode = true
-                    deviationValue = deviationSettings["-19ms to +39ms"]
-                    currentDeviation = "-19ms to +39ms"
+                    deviationValue = deviationSettings["±10ms"]
+                    currentDeviation = "±10ms"
                     DeviationButton.Text = currentDeviation
-                    print("[Spectate Mode]: ENABLED - Switched to -19ms to +39ms deviation")
+                    print("[Spectate Mode]: ENABLED - Switched to ±10ms deviation")
                     updateStatus()
                 end
                 return true
