@@ -5,6 +5,8 @@
      Added Standard Deviation Settings
      Added Asymmetric Deviation Setting
      Auto-detects spectate mode
+     Modified: Spectate mode now uses -20ms to +31ms
+     Fixed: Negative ms timing now works correctly
 ]]
 
 local player = game:GetService("Players").LocalPlayer
@@ -25,6 +27,9 @@ local deviationOptions = {"0ms (Perfect)", "±10ms", "-19ms to +39ms", "-30ms to
 local currentDeviation = "0ms (Perfect)" -- Default deviation
 local deviationValue = {min = 0, max = 0}
 local currentDeviationIndex = 1
+
+-- Spectate mode specific deviation
+local spectateDeviation = {min = -20, max = 31}
 
 local trackSystem
 local random = Random.new()
@@ -489,10 +494,10 @@ local function setupChatDetection()
                 if not spectateMode then
                     savedDeviation = currentDeviation
                     spectateMode = true
-                    deviationValue = deviationSettings["±10ms"]
-                    currentDeviation = "±10ms"
+                    deviationValue = spectateDeviation
+                    currentDeviation = "-20ms to +31ms"
                     DeviationButton.Text = currentDeviation
-                    print("[Spectate Mode]: ENABLED - Switched to ±10ms deviation")
+                    print("[Spectate Mode]: ENABLED - Switched to -20ms to +31ms deviation")
                     updateStatus()
                 end
                 return true
@@ -599,9 +604,29 @@ trackSystem.new = function(...)
                         local noteTrackIndex = note:get_track_index(noteIndex)
                         local pressed, pressResult, pressDelay = testPress(note)
                         
-                        local actualTiming = getRandomTiming(noteTimeTarget)
+                        -- Generate random timing offset
+                        local timingOffset = 0
+                        if deviationValue.min ~= 0 or deviationValue.max ~= 0 then
+                            timingOffset = random:NextNumber(deviationValue.min, deviationValue.max)
+                        end
                         
-                        if pressed and pressDelay >= actualTiming then
+                        -- Calculate actual timing window
+                        -- For negative offsets, we need to hit earlier (when pressDelay is less than target)
+                        -- For positive offsets, we hit later (when pressDelay is more than target)
+                        local targetTiming = noteTimeTarget + timingOffset
+                        
+                        -- Check if note is in the hit window
+                        -- The condition needs to handle both negative and positive timing
+                        local canHit = false
+                        if timingOffset < 0 then
+                            -- For early hits (negative ms), hit when pressDelay is close to the target
+                            canHit = pressed and pressDelay <= -timingOffset and pressDelay >= targetTiming
+                        else
+                            -- For late hits (positive ms) or perfect timing, hit when pressDelay is at or past target
+                            canHit = pressed and pressDelay >= targetTiming
+                        end
+                        
+                        if canHit then
                             pressTrack(localTrackSystem, session, noteTrackIndex)
                             session:debug_any_press()
                             
@@ -618,9 +643,17 @@ trackSystem.new = function(...)
                         if testRelease and not rawget(note, "get_time_to_end") then 
                             local released, releaseResult, releaseDelay = testRelease(note)
                             
-                            if released and releaseDelay >= actualTiming then
-                                local releaseDelay = 0.02 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
-                                task.delay(releaseDelay, function()
+                            -- Same logic for release timing
+                            local releaseCanHit = false
+                            if timingOffset < 0 then
+                                releaseCanHit = released and releaseDelay <= -timingOffset and releaseDelay >= targetTiming
+                            else
+                                releaseCanHit = released and releaseDelay >= targetTiming
+                            end
+                            
+                            if releaseCanHit then
+                                local delayTime = 0.02 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
+                                task.delay(delayTime, function()
                                     releaseTrack(localTrackSystem, session, noteTrackIndex)
                                 end)
                             end
