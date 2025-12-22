@@ -4,6 +4,7 @@
      Fixed hold note detection and handling
      Added Standard Deviation Settings
      Added Asymmetric Deviation Setting
+     Added Initial Greats Configuration
      Auto-detects spectate mode
      Modified: Spectate mode now uses -20ms to +31ms
      Fixed: Negative ms timing now works correctly
@@ -28,6 +29,11 @@ local currentDeviation = "0ms (Perfect)" -- Default deviation
 local deviationValue = {min = 0, max = 0}
 local currentDeviationIndex = 1
 
+-- Initial Greats settings
+local initialGreatsCount = 0 -- Number of greats to force at the start
+local greatsHitCount = 0 -- Counter for how many greats have been hit
+local greatsTiming = {min = -19, max = 39} -- Timing window for "Great" rating
+
 -- Spectate mode specific deviation
 local spectateDeviation = {min = -20, max = 31}
 
@@ -41,6 +47,7 @@ local lastRandomValues = {} -- Track recent random values to avoid clumping
 local StatusLabel
 local DeviationButton
 local EnableToggle
+local GreatsInput
 
 --// Autoplayer functions 
 
@@ -79,15 +86,22 @@ local function getLocalTrackSystem(session)
 end
 
 -- Function to generate random timing with deviation
-local function getRandomTiming(baseTiming)
-    if deviationValue.min ~= 0 or deviationValue.max ~= 0 then
+local function getRandomTiming(baseTiming, forceGreat)
+    local targetDeviation = deviationValue
+    
+    -- If we need to force a great, use the greats timing window
+    if forceGreat and greatsHitCount < initialGreatsCount then
+        targetDeviation = greatsTiming
+    end
+    
+    if targetDeviation.min ~= 0 or targetDeviation.max ~= 0 then
         local randomOffset
         local attempts = 0
-        local range = deviationValue.max - deviationValue.min
+        local range = targetDeviation.max - targetDeviation.min
         
         -- Try to get a value that's not too close to recent values (better distribution)
         repeat
-            randomOffset = random:NextNumber(deviationValue.min, deviationValue.max)
+            randomOffset = random:NextNumber(targetDeviation.min, targetDeviation.max)
             attempts = attempts + 1
             
             -- Check if this value is too similar to recent values
@@ -119,10 +133,12 @@ end
 local function updateStatus()
     if StatusLabel then
         StatusLabel.Text = string.format(
-            "Status:\nAutoplayer: %s\nSpectate Mode: %s\nDeviation: %s\nTrackSystem: %s",
+            "Status:\nAutoplayer: %s\nSpectate Mode: %s\nDeviation: %s\nInitial Greats: %d (%d hit)\nTrackSystem: %s",
             autoplayerEnabled and "ENABLED" or "DISABLED",
             spectateMode and "ACTIVE" or "INACTIVE",
             currentDeviation,
+            initialGreatsCount,
+            greatsHitCount,
             trackSystem and "Found" or "Not Found"
         )
     end
@@ -156,11 +172,11 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = PlayerGui
 
--- Main Frame
+-- Main Frame (increased height for new UI element)
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 350, 0, 380)
-MainFrame.Position = UDim2.new(0.5, -175, 0.5, -190)
+MainFrame.Size = UDim2.new(0, 350, 0, 440)
+MainFrame.Position = UDim2.new(0.5, -175, 0.5, -220)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Parent = ScreenGui
@@ -243,14 +259,76 @@ EnableToggle.MouseButton1Click:Connect(function()
     autoplayerEnabled = not autoplayerEnabled
     EnableToggle.Text = autoplayerEnabled and "ON" or "OFF"
     EnableToggle.BackgroundColor3 = autoplayerEnabled and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 50, 50)
+    
+    -- Reset greats counter when enabling
+    if autoplayerEnabled then
+        greatsHitCount = 0
+    end
+    
     print("Autoplayer:", autoplayerEnabled and "ENABLED" or "DISABLED")
     updateStatus()
+end)
+
+-- Initial Greats Configuration
+local GreatsLabel = Instance.new("TextLabel")
+GreatsLabel.Size = UDim2.new(1, -40, 0, 30)
+GreatsLabel.Position = UDim2.new(0, 20, 0, 105)
+GreatsLabel.BackgroundTransparency = 1
+GreatsLabel.Text = "Initial Greats (at song start)"
+GreatsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+GreatsLabel.TextSize = 14
+GreatsLabel.Font = Enum.Font.Gotham
+GreatsLabel.TextXAlignment = Enum.TextXAlignment.Left
+GreatsLabel.Parent = MainFrame
+
+GreatsInput = Instance.new("TextBox")
+GreatsInput.Size = UDim2.new(0, 60, 0, 30)
+GreatsInput.Position = UDim2.new(0, 20, 0, 135)
+GreatsInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+GreatsInput.Text = "0"
+GreatsInput.PlaceholderText = "0-10"
+GreatsInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+GreatsInput.TextSize = 12
+GreatsInput.Font = Enum.Font.Gotham
+GreatsInput.BorderSizePixel = 0
+GreatsInput.Parent = MainFrame
+
+local GreatsCorner = Instance.new("UICorner")
+GreatsCorner.CornerRadius = UDim.new(0, 5)
+GreatsCorner.Parent = GreatsInput
+
+local ApplyGreatsButton = Instance.new("TextButton")
+ApplyGreatsButton.Size = UDim2.new(0, 60, 0, 30)
+ApplyGreatsButton.Position = UDim2.new(0, 90, 0, 135)
+ApplyGreatsButton.BackgroundColor3 = Color3.fromRGB(50, 150, 200)
+ApplyGreatsButton.Text = "Apply"
+ApplyGreatsButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ApplyGreatsButton.TextSize = 12
+ApplyGreatsButton.Font = Enum.Font.GothamBold
+ApplyGreatsButton.BorderSizePixel = 0
+ApplyGreatsButton.Parent = MainFrame
+
+local ApplyGreatsCorner = Instance.new("UICorner")
+ApplyGreatsCorner.CornerRadius = UDim.new(0, 5)
+ApplyGreatsCorner.Parent = ApplyGreatsButton
+
+ApplyGreatsButton.MouseButton1Click:Connect(function()
+    local greatsVal = tonumber(GreatsInput.Text)
+    
+    if greatsVal and greatsVal >= 0 and greatsVal <= 100 then
+        initialGreatsCount = math.floor(greatsVal)
+        greatsHitCount = 0
+        print("Initial Greats set to:", initialGreatsCount)
+        updateStatus()
+    else
+        warn("Please enter a valid number (0-100)")
+    end
 end)
 
 -- Deviation Dropdown
 local DeviationLabel = Instance.new("TextLabel")
 DeviationLabel.Size = UDim2.new(1, -40, 0, 30)
-DeviationLabel.Position = UDim2.new(0, 20, 0, 105)
+DeviationLabel.Position = UDim2.new(0, 20, 0, 180)
 DeviationLabel.BackgroundTransparency = 1
 DeviationLabel.Text = "Standard Deviation"
 DeviationLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -261,7 +339,7 @@ DeviationLabel.Parent = MainFrame
 
 DeviationButton = Instance.new("TextButton")
 DeviationButton.Size = UDim2.new(1, -40, 0, 30)
-DeviationButton.Position = UDim2.new(0, 20, 0, 135)
+DeviationButton.Position = UDim2.new(0, 20, 0, 210)
 DeviationButton.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 DeviationButton.Text = currentDeviation
 DeviationButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -293,7 +371,7 @@ end)
 -- Custom Deviation Inputs
 local CustomLabel = Instance.new("TextLabel")
 CustomLabel.Size = UDim2.new(1, -40, 0, 30)
-CustomLabel.Position = UDim2.new(0, 20, 0, 175)
+CustomLabel.Position = UDim2.new(0, 20, 0, 250)
 CustomLabel.BackgroundTransparency = 1
 CustomLabel.Text = "Custom Deviation (ms)"
 CustomLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -305,7 +383,7 @@ CustomLabel.Parent = MainFrame
 -- Min Input
 local MinLabel = Instance.new("TextLabel")
 MinLabel.Size = UDim2.new(0, 40, 0, 30)
-MinLabel.Position = UDim2.new(0, 20, 0, 205)
+MinLabel.Position = UDim2.new(0, 20, 0, 280)
 MinLabel.BackgroundTransparency = 1
 MinLabel.Text = "Min:"
 MinLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -316,7 +394,7 @@ MinLabel.Parent = MainFrame
 
 local MinInput = Instance.new("TextBox")
 MinInput.Size = UDim2.new(0, 80, 0, 30)
-MinInput.Position = UDim2.new(0, 60, 0, 205)
+MinInput.Position = UDim2.new(0, 60, 0, 280)
 MinInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 MinInput.Text = "0"
 MinInput.PlaceholderText = "-30"
@@ -333,7 +411,7 @@ MinCorner.Parent = MinInput
 -- Max Input
 local MaxLabel = Instance.new("TextLabel")
 MaxLabel.Size = UDim2.new(0, 40, 0, 30)
-MaxLabel.Position = UDim2.new(0, 150, 0, 205)
+MaxLabel.Position = UDim2.new(0, 150, 0, 280)
 MaxLabel.BackgroundTransparency = 1
 MaxLabel.Text = "Max:"
 MaxLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -344,7 +422,7 @@ MaxLabel.Parent = MainFrame
 
 local MaxInput = Instance.new("TextBox")
 MaxInput.Size = UDim2.new(0, 80, 0, 30)
-MaxInput.Position = UDim2.new(0, 190, 0, 205)
+MaxInput.Position = UDim2.new(0, 190, 0, 280)
 MaxInput.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 MaxInput.Text = "0"
 MaxInput.PlaceholderText = "+50"
@@ -361,7 +439,7 @@ MaxCorner.Parent = MaxInput
 -- Apply Custom Button
 local ApplyCustomButton = Instance.new("TextButton")
 ApplyCustomButton.Size = UDim2.new(0, 60, 0, 30)
-ApplyCustomButton.Position = UDim2.new(1, -80, 0, 205)
+ApplyCustomButton.Position = UDim2.new(1, -80, 0, 280)
 ApplyCustomButton.BackgroundColor3 = Color3.fromRGB(50, 150, 200)
 ApplyCustomButton.Text = "Apply"
 ApplyCustomButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -397,12 +475,12 @@ ApplyCustomButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- Status Display
+-- Status Display (adjusted position)
 StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(1, -40, 0, 65)
-StatusLabel.Position = UDim2.new(0, 20, 0, 250)
+StatusLabel.Size = UDim2.new(1, -40, 0, 75)
+StatusLabel.Position = UDim2.new(0, 20, 0, 325)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-StatusLabel.Text = "Status:\nAutoplayer: DISABLED\nSpectate Mode: INACTIVE\nDeviation: " .. currentDeviation
+StatusLabel.Text = "Status:\nAutoplayer: DISABLED\nSpectate Mode: INACTIVE\nDeviation: " .. currentDeviation .. "\nInitial Greats: 0 (0 hit)"
 StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 StatusLabel.TextSize = 12
 StatusLabel.Font = Enum.Font.Gotham
@@ -420,10 +498,10 @@ local StatusCorner = Instance.new("UICorner")
 StatusCorner.CornerRadius = UDim.new(0, 5)
 StatusCorner.Parent = StatusLabel
 
--- Disable Spectate Mode Button
+-- Disable Spectate Mode Button (adjusted position)
 local DisableSpectateButton = Instance.new("TextButton")
 DisableSpectateButton.Size = UDim2.new(1, -40, 0, 25)
-DisableSpectateButton.Position = UDim2.new(0, 20, 0, 325)
+DisableSpectateButton.Position = UDim2.new(0, 20, 0, 410)
 DisableSpectateButton.BackgroundColor3 = Color3.fromRGB(180, 100, 50)
 DisableSpectateButton.Text = "Disable Spectate Mode"
 DisableSpectateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -604,19 +682,26 @@ trackSystem.new = function(...)
                         local noteTrackIndex = note:get_track_index(noteIndex)
                         local pressed, pressResult, pressDelay = testPress(note)
                         
+                        -- Determine if we should force a great for this note
+                        local forceGreat = greatsHitCount < initialGreatsCount
+                        
                         -- Generate random timing offset
                         local timingOffset = 0
-                        if deviationValue.min ~= 0 or deviationValue.max ~= 0 then
-                            timingOffset = random:NextNumber(deviationValue.min, deviationValue.max)
+                        local targetDeviation = deviationValue
+                        
+                        -- If forcing greats, use greats timing window
+                        if forceGreat then
+                            targetDeviation = greatsTiming
+                        end
+                        
+                        if targetDeviation.min ~= 0 or targetDeviation.max ~= 0 then
+                            timingOffset = random:NextNumber(targetDeviation.min, targetDeviation.max)
                         end
                         
                         -- Calculate actual timing window
-                        -- For negative offsets, we need to hit earlier (when pressDelay is less than target)
-                        -- For positive offsets, we hit later (when pressDelay is more than target)
                         local targetTiming = noteTimeTarget + timingOffset
                         
                         -- Check if note is in the hit window
-                        -- The condition needs to handle both negative and positive timing
                         local canHit = false
                         if timingOffset < 0 then
                             -- For early hits (negative ms), hit when pressDelay is close to the target
@@ -630,9 +715,15 @@ trackSystem.new = function(...)
                             pressTrack(localTrackSystem, session, noteTrackIndex)
                             session:debug_any_press()
                             
+                            -- Increment greats counter if we forced a great
+                            if forceGreat then
+                                greatsHitCount = greatsHitCount + 1
+                                updateStatus()
+                            end
+                            
                             local hasEndTime = rawget(note, "get_time_to_end")
                             if hasEndTime then
-                                local releaseDelay = 0.05 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
+                                local releaseDelay = 0.05 + random:NextNumber(0, math.max(math.abs(targetDeviation.min), math.abs(targetDeviation.max))/1000)
                                 task.delay(releaseDelay, function()
                                     releaseTrack(localTrackSystem, session, noteTrackIndex)
                                 end)
@@ -652,7 +743,7 @@ trackSystem.new = function(...)
                             end
                             
                             if releaseCanHit then
-                                local delayTime = 0.02 + random:NextNumber(0, math.max(math.abs(deviationValue.min), math.abs(deviationValue.max))/1000)
+                                local delayTime = 0.02 + random:NextNumber(0, math.max(math.abs(targetDeviation.min), math.abs(targetDeviation.max))/1000)
                                 task.delay(delayTime, function()
                                     releaseTrack(localTrackSystem, session, noteTrackIndex)
                                 end)
@@ -671,3 +762,4 @@ end
 
 print("[RoBeats Autoplayer] Loaded successfully!")
 print("[RoBeats Autoplayer] Press Left Control to toggle UI")
+print("[RoBeats Autoplayer] Initial Greats feature added - configure in UI")89
